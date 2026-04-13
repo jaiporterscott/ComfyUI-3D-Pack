@@ -21,10 +21,10 @@ pccm
 PyGithub
 requests
 
-# computational libraries
+# computational libraries (scipy pinned >=1.15 for Python 3.14 wheel support)
 numpy
 einops
-scipy
+scipy>=1.15.0
 kornia
 opencv-python
 pillow
@@ -62,7 +62,7 @@ plyfile
 pygltflib
 xatlas
 pymeshlab
-gpytoolbox
+# gpytoolbox installed separately with --no-build-isolation (see install.py)
 PyMCubes
 libigl
 pyvista

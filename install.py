@@ -151,6 +151,24 @@ try:
         subprocess.run([PYTHON_PATH, "-s", "-m", "pip", "install", cumm_pkg])
         subprocess.run([PYTHON_PATH, "-s", "-m", "pip", "install", spconv_pkg])
 
+    # Install gpytoolbox with --no-build-isolation
+    # gpytoolbox's build deps pin scipy<1.15 which has no Python 3.13+/3.14 wheels,
+    # causing Fortran compiler errors when scipy tries to build from source.
+    # Using --no-build-isolation lets it use our already-installed scipy>=1.15.
+    from build_utils import is_package_installed
+    if not is_package_installed("gpytoolbox"):
+        cstr("Installing gpytoolbox with --no-build-isolation...").msg.print()
+        result = subprocess.run(
+            [PYTHON_PATH, "-s", "-m", "pip", "install", "--no-build-isolation", "gpytoolbox"],
+            text=True, capture_output=True
+        )
+        if result.returncode != 0:
+            cstr(f"gpytoolbox install failed: {result.stderr[-300:]}").warning.print()
+            cstr("Trying fallback: pip install gpytoolbox (with isolation)...").warning.print()
+            subprocess.run([PYTHON_PATH, "-s", "-m", "pip", "install", "gpytoolbox"])
+    else:
+        cstr("gpytoolbox is already installed, skipping...").msg.print()
+
     # Install packages requiring special flags (like --no-build-isolation)
     if hasattr(build_config, 'isolated_packages'):
         install_isolated_packages(build_config.isolated_packages)

@@ -13,10 +13,10 @@ pccm
 PyGithub
 requests
 
-# computational libraries
+# computational libraries (scipy MUST be installed before gpytoolbox)
 numpy
 einops
-scipy
+scipy>=1.15.0
 kornia
 opencv-python
 pillow
@@ -54,7 +54,8 @@ plyfile
 pygltflib
 xatlas
 pymeshlab
-gpytoolbox
+# gpytoolbox is installed separately with --no-build-isolation in install.py
+# (its build deps pin scipy<1.15 which has no Python 3.14 wheels)
 PyMCubes
 libigl
 pyvista
