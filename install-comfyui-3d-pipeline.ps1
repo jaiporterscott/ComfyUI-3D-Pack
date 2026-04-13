@@ -240,29 +240,35 @@ if ($existingVenv) {
     Write-OK "Created venv: $VENV_DIR"
 }
 
-$pip = "$VENV_DIR\Scripts\pip.exe"
 $python = "$VENV_DIR\Scripts\python.exe"
+# Always use "python -m pip" instead of pip.exe directly to avoid
+# "Failed to canonicalize script path" errors on StabilityMatrix venvs
 
-# --- Upgrade pip ---
-& $python -m pip install --upgrade pip setuptools wheel 2>&1 | Out-Null
-Write-OK "pip upgraded"
+# --- When SkipComfyUI is set, skip PyTorch/ComfyUI/xformers (already installed) ---
+if (-not $SkipComfyUI) {
+    # --- Upgrade pip ---
+    & $python -m pip install --upgrade pip setuptools wheel 2>&1 | Out-Null
+    Write-OK "pip upgraded"
 
-# --- PyTorch 2.7.0 + cu126 ---
-Write-Host "  Installing PyTorch $TORCH_VERSION + $CU_TAG..."
-& $pip install "torch==$TORCH_VERSION" "torchvision==$TORCHVISION_VER" "torchaudio==$TORCHAUDIO_VER" --index-url $TORCH_INDEX
-Write-OK "PyTorch installed"
+    # --- PyTorch 2.7.0 + cu126 ---
+    Write-Host "  Installing PyTorch $TORCH_VERSION + $CU_TAG..."
+    & $python -m pip install "torch==$TORCH_VERSION" "torchvision==$TORCHVISION_VER" "torchaudio==$TORCHAUDIO_VER" --index-url $TORCH_INDEX
+    Write-OK "PyTorch installed"
 
-# --- ComfyUI requirements ---
-if (Test-Path "$InstallDir\requirements.txt") {
-    Write-Host "  Installing ComfyUI requirements..."
-    & $pip install -r "$InstallDir\requirements.txt" 2>&1 | Out-Null
-    Write-OK "ComfyUI requirements installed"
+    # --- ComfyUI requirements ---
+    if (Test-Path "$InstallDir\requirements.txt") {
+        Write-Host "  Installing ComfyUI requirements..."
+        & $python -m pip install -r "$InstallDir\requirements.txt" 2>&1 | Out-Null
+        Write-OK "ComfyUI requirements installed"
+    }
+
+    # --- xformers ---
+    Write-Host "  Installing xformers $XFORMERS_VER..."
+    & $python -m pip install "xformers==$XFORMERS_VER" --index-url $TORCH_INDEX
+    Write-OK "xformers installed"
+} else {
+    Write-OK "Skipping PyTorch/ComfyUI/xformers (existing install)"
 }
-
-# --- xformers (prebuilt cu126 wheel, no source build needed) ---
-Write-Host "  Installing xformers $XFORMERS_VER..."
-& $pip install "xformers==$XFORMERS_VER" --index-url $TORCH_INDEX
-Write-OK "xformers installed"
 
 # ===========================================================
 # Clone all custom nodes
@@ -309,6 +315,7 @@ $nodes = @(
 )
 
 Write-Host "  Cloning custom nodes..."
+$newlyCloned = @()
 foreach ($node in $nodes) {
     $nodePath = "$nodesDir\$($node.Name)"
     if (Test-Path $nodePath) {
@@ -321,82 +328,72 @@ foreach ($node in $nodes) {
         $gitArgs += $nodePath
         Write-Host "  Cloning $($node.Name)..."
         & git @gitArgs 2>&1 | Out-Null
+        $newlyCloned += $node.Name
     }
 }
-Write-OK "All nodes cloned"
-
-# ===========================================================
-# Shared dependencies
-# ===========================================================
-Write-Host "`n  Installing shared dependencies..."
-
-# spconv + cumm (prebuilt cu126)
-& $pip install cumm-cu126 spconv-cu126 2>&1 | Out-Null
-Write-OK "spconv + cumm"
-
-# PyG packages (torch-scatter + torch-cluster)
-& $pip install torch-scatter torch-cluster --find-links $PYG_LINKS 2>&1 | Out-Null
-Write-OK "torch-scatter + torch-cluster"
-
-# scipy first, then gpytoolbox with --no-build-isolation
-& $pip install "scipy>=1.15.0" 2>&1 | Out-Null
-& $pip install --no-build-isolation gpytoolbox 2>&1 | Out-Null
-Write-OK "scipy + gpytoolbox"
-
-# rembg GPU + insightface
-& $pip install "rembg[gpu]" 2>&1 | Out-Null
-& $pip install insightface 2>&1 | Out-Null
-Write-OK "rembg[gpu] + insightface"
-
-# ===========================================================
-# Install each node's requirements
-# ===========================================================
-Write-Host "`n  Installing node requirements..."
-
-# 3D-Pack first (heaviest - builds pytorch3d, nvdiffrast, etc.)
-if (Test-Path "$nodesDir\ComfyUI-3D-Pack") {
-    Write-Host "  [1/15] ComfyUI-3D-Pack (this takes a while)..."
-    Set-Location "$nodesDir\ComfyUI-3D-Pack"
-    if (Test-Path "requirements.txt") { & $pip install -r requirements.txt 2>&1 | Out-Null }
-    if (Test-Path "install.py") { & $python install.py 2>&1 | Out-Null }
-    Set-Location $nodesDir
-    Write-OK "ComfyUI-3D-Pack"
+if ($newlyCloned.Count -gt 0) {
+    Write-OK "$($newlyCloned.Count) new nodes cloned"
+} else {
+    Write-OK "All nodes already present"
 }
 
-# All other nodes
-$otherNodes = @(
-    "ComfyUI-Impact-Pack",
-    "ComfyUI-KJNodes",
-    "ComfyUI-VideoHelperSuite",
-    "comfyui_controlnet_aux",
-    "ComfyUI-Frame-Interpolation",
-    "ComfyUI-TextureAlchemy",
-    "ComfyUI-UniRig",
-    "ComfyUI-TRELLIS2",
-    "ComfyUI-GeometryPack",
-    "ComfyUI-MotionCapture",
-    "ComfyUI-SAM3DBody",
-    "ComfyUI-segment-anything-2",
-    "comfyui_segment_anything",
-    "COMFYUI-PBRFusion4"
+# ===========================================================
+# Shared dependencies (only installs what's missing)
+# ===========================================================
+Write-Host "`n  Installing shared dependencies (skipping already installed)..."
+
+$sharedDeps = @(
+    @{ Pkgs = @("cumm-cu126", "spconv-cu126"); Label = "spconv + cumm" },
+    @{ Pkgs = @("torch-scatter", "torch-cluster"); Extra = "--find-links $PYG_LINKS"; Label = "torch-scatter + torch-cluster" },
+    @{ Pkgs = @("scipy>=1.15.0"); Label = "scipy" },
+    @{ Pkgs = @("gpytoolbox"); Extra = "--no-build-isolation"; Label = "gpytoolbox" },
+    @{ Pkgs = @("rembg[gpu]"); Label = "rembg[gpu]" },
+    @{ Pkgs = @("insightface"); Label = "insightface" }
 )
 
-$i = 2
-foreach ($nodeDir in $otherNodes) {
-    $nodePath = "$nodesDir\$nodeDir"
-    if (Test-Path $nodePath) {
-        Write-Host "  [$i/15] $nodeDir..."
-        if (Test-Path "$nodePath\requirements.txt") {
-            & $pip install -r "$nodePath\requirements.txt" 2>&1 | Out-Null
-        }
-        if (Test-Path "$nodePath\install.py") {
-            Set-Location $nodePath
-            & $python install.py 2>&1 | Out-Null
-            Set-Location $nodesDir
-        }
-        Write-OK $nodeDir
+foreach ($dep in $sharedDeps) {
+    $allInstalled = $true
+    foreach ($pkg in $dep.Pkgs) {
+        $checkName = ($pkg -replace '[>=<\[\]].*','')  # strip version/extras
+        $check = & $python -c "import importlib; importlib.import_module('$checkName'.replace('-','_'))" 2>&1
+        if ($LASTEXITCODE -ne 0) { $allInstalled = $false; break }
     }
-    $i++
+    if ($allInstalled) {
+        Write-OK "$($dep.Label) already installed"
+    } else {
+        Write-Host "  Installing $($dep.Label)..."
+        $cmd = @("-m", "pip", "install") + $dep.Pkgs
+        if ($dep.Extra) { $cmd += ($dep.Extra -split ' ') }
+        & $python @cmd 2>&1 | Out-Null
+        Write-OK "$($dep.Label)"
+    }
+}
+
+# ===========================================================
+# Install requirements for NEW nodes only (skip existing)
+# ===========================================================
+if ($newlyCloned.Count -eq 0) {
+    Write-Host "`n  No new nodes to install requirements for."
+} else {
+    Write-Host "`n  Installing requirements for $($newlyCloned.Count) new node(s)..."
+
+    $i = 1
+    foreach ($nodeDir in $newlyCloned) {
+        $nodePath = "$nodesDir\$nodeDir"
+        if (Test-Path $nodePath) {
+            Write-Host "  [$i/$($newlyCloned.Count)] $nodeDir..."
+            if (Test-Path "$nodePath\requirements.txt") {
+                & $python -m pip install -r "$nodePath\requirements.txt" 2>&1 | Out-Null
+            }
+            if (Test-Path "$nodePath\install.py") {
+                Set-Location $nodePath
+                & $python install.py 2>&1 | Out-Null
+                Set-Location $nodesDir
+            }
+            Write-OK $nodeDir
+        }
+        $i++
+    }
 }
 
 # ===========================================================
