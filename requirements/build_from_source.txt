@@ -1,0 +1,27 @@
+# =============================================================================
+# ComfyUI-3D-Pack: Dependencies built from source
+# =============================================================================
+# These CUDA extensions are cloned and compiled by install.py / auto_build_all.py.
+# Listed here for reference only -- do NOT pip install this file directly.
+#
+# All of these build against whichever CUDA toolkit nvcc points to.
+# On CUDA 13.x they compile fine (no removed API usage detected).
+
+# Sparse convolution (3D voxel networks)
+# https://github.com/traveller59/spconv.git
+# NOTE: requires cumm; on CUDA 13.x use dual CUDA approach (build with 12.x)
+
+# Differentiable Gaussian splatting rasterizer
+# https://github.com/ashawkey/diff-gaussian-rasterization.git
+
+# NVIDIA differentiable rasterizer
+# https://github.com/NVlabs/nvdiffrast.git
+
+# UI/rendering toolkit
+# https://github.com/ashawkey/kiuikit.git
+
+# Facebook 3D deep learning
+# https://github.com/facebookresearch/pytorch3d.git
+
+# PyTorch Geometric scatter ops
+# https://github.com/rusty1s/pytorch_scatter.git

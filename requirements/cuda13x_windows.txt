@@ -1,0 +1,33 @@
+# =============================================================================
+# ComfyUI-3D-Pack: CUDA 13.x on Windows (full setup)
+# =============================================================================
+# For Windows systems with CUDA 13.x. Install with:
+#   pip install -r requirements/cuda13x_windows.txt
+#
+# Then build xformers from source (10-30 min, one time):
+#   pip install -v --no-build-isolation git+https://github.com/facebookresearch/xformers.git@main#egg=xformers
+#
+# Prerequisites:
+#   - CUDA 13.x toolkit (primary)
+#   - CUDA 12.8 toolkit (for spconv/cumm compilation only)
+#   - Visual Studio 2022 Build Tools with C++ workload
+#   - Set CXXFLAGS=/Zc:preprocessor before building CUDA extensions
+
+-r base.txt
+
+# --- PyTorch stack (cu130) ---
+--extra-index-url https://download.pytorch.org/whl/cu130
+torch==2.9.1
+torchvision==0.24.1
+torchaudio==2.9.1
+
+# xformers is NOT included here - must be built from source on Windows + CUDA 13.x
+# See instructions above
+
+# --- spconv/cumm (compiled against CUDA 12.6, ABI compatible with 13.x) ---
+cumm-cu126
+spconv-cu126
+
+# --- torch-scatter ---
+--find-links https://data.pyg.org/whl/torch-2.9.1+cu130.html
+torch-scatter

@@ -1,0 +1,40 @@
+# =============================================================================
+# ComfyUI-3D-Pack: CUDA 13.x requirements (13.0+)
+# =============================================================================
+# For systems with CUDA 13.x toolkit. Install with:
+#   pip install -r requirements/cuda13x.txt
+#
+# Uses PyTorch cu130 wheels (the only CUDA 13 tag PyTorch publishes).
+# CUDA 13.2 is forward-compatible with cu130 wheels.
+#
+# IMPORTANT: spconv/cumm require a CUDA 12.x toolkit for compilation.
+# Install CUDA 12.8 alongside 13.x:
+#   Windows: https://developer.nvidia.com/cuda-12-8-0-download-archive
+#   Linux:   sudo apt install cuda-toolkit-12-8
+# The 12.x toolkit is only needed at build time; everything runs on the 13.x driver.
+
+-r base.txt
+
+# --- PyTorch stack (cu130 for CUDA 13.x) ---
+# Uses --extra-index-url (not --index-url) to work around missing cuda-bindings
+# package on the cu130 index: https://github.com/pytorch/pytorch/issues/172926
+--extra-index-url https://download.pytorch.org/whl/cu130
+torch==2.9.1
+torchvision==0.24.1
+torchaudio==2.9.1
+
+# --- xformers ---
+# Linux: prebuilt cu130 wheel works
+# Windows: prebuilt cu130 wheels are broken, build from source instead:
+#   pip install -v --no-build-isolation git+https://github.com/facebookresearch/xformers.git@main#egg=xformers
+xformers==0.0.34; sys_platform != "win32"
+
+# --- spconv/cumm (dual CUDA approach) ---
+# These are compiled against CUDA 12.6 but are ABI forward-compatible with 13.x.
+# The NVIDIA driver provides runtime compatibility across major CUDA versions.
+cumm-cu126
+spconv-cu126
+
+# --- torch-scatter (cu130 wheels on PyG) ---
+--find-links https://data.pyg.org/whl/torch-2.9.1+cu130.html
+torch-scatter

@@ -23,6 +23,9 @@ try:
         install_remote_packages,
         install_platform_packages,
         install_isolated_packages,
+        install_spconv_with_dual_cuda,
+        get_spconv_cuda_tag,
+        get_cuda_major_minor,
         wheels_dir_exists_and_not_empty,
         build_config,
         PYTHON_PATH,
@@ -107,10 +110,47 @@ try:
             
         return build_succeed
     
-    # Install packages that needs specify remote url
-    install_remote_packages(build_config.build_base_packages)
+    # On Windows + CUDA 13.x, xformers prebuilt wheels are broken.
+    # Build from source instead (takes 10-30 min).
+    cuda_ver = get_cuda_major_minor()
+    if platform.system() == "Windows" and cuda_ver and cuda_ver[0] >= 13:
+        cstr("Windows + CUDA 13.x: xformers will be built from source (prebuilt wheels broken)").warning.print()
+        # Install base packages except xformers
+        base_packages_no_xformers = [p for p in build_config.build_base_packages if p != "xformers"]
+        install_remote_packages(base_packages_no_xformers)
+
+        # Build xformers from source
+        cstr("Building xformers from source (this may take 10-30 minutes)...").msg.print()
+        xformers_result = subprocess.run(
+            [PYTHON_PATH, "-s", "-m", "pip", "install", "-v", "--no-build-isolation",
+             "git+https://github.com/facebookresearch/xformers.git@main#egg=xformers"],
+            text=True, capture_output=True
+        )
+        if xformers_result.returncode != 0:
+            cstr(f"xformers source build failed. Some features may not work.").warning.print()
+            cstr(f"Error: {xformers_result.stderr[-500:]}").error.print()
+        else:
+            cstr("xformers built from source successfully").msg.print()
+    else:
+        install_remote_packages(build_config.build_base_packages)
+
     install_platform_packages()
-    
+
+    # Install spconv with CUDA-version-aware handling
+    spconv_tag = get_spconv_cuda_tag()
+    if spconv_tag == "dual_cuda":
+        cstr("CUDA 13.x detected: using dual CUDA approach for spconv/cumm...").msg.print()
+        if not install_spconv_with_dual_cuda():
+            cstr("[WARNING] spconv installation failed. Nodes requiring spconv will not work.").warning.print()
+            cstr("Install a CUDA 12.x toolkit alongside 13.x to enable spconv compilation.").warning.print()
+    else:
+        # For CUDA <=12.8, install matching prebuilt cumm and spconv wheels
+        cumm_pkg = f"cumm-{spconv_tag}"
+        spconv_pkg = f"spconv-{spconv_tag}"
+        cstr(f"Installing {cumm_pkg} and {spconv_pkg}...").msg.print()
+        subprocess.run([PYTHON_PATH, "-s", "-m", "pip", "install", cumm_pkg])
+        subprocess.run([PYTHON_PATH, "-s", "-m", "pip", "install", spconv_pkg])
+
     # Install packages requiring special flags (like --no-build-isolation)
     if hasattr(build_config, 'isolated_packages'):
         install_isolated_packages(build_config.isolated_packages)
