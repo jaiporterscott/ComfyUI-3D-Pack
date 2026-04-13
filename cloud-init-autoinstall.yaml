@@ -24,7 +24,7 @@ autoinstall:
     - openssh-server
     - dotnet-sdk-8.0
     - aspnetcore-runtime-8.0
-    # ---- Python 3.11 (required by UniRig, compatible with ComfyUI-3D-Pack) ----
+    # ---- Python 3.11 (required by UniRig, compatible with all nodes) ----
     - python3.11
     - python3.11-dev
     - python3.11-venv
@@ -48,40 +48,36 @@ autoinstall:
     - libsm6
     - libxext6
     - libxrender1
-    # ---- Fortran compiler (needed if any package builds scipy from source) ----
+    # ---- Fortran compiler (fallback if scipy builds from source) ----
     - gfortran
   runcmd:
     # =================================================================
-    # 1. NVIDIA CUDA 13.2 + Driver 595 (RTX Pro 4000 / Ada Lovelace)
+    # 1. NVIDIA CUDA 12.8 Toolkit + Driver
     # =================================================================
-    # CUDA 13.2 requires driver >= 595.45.04
     - wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
     - dpkg -i cuda-keyring_1.1-1_all.deb
     - apt-get update
-    - apt-get install -y cuda-toolkit-13-2 nvidia-driver-595
-    # Set CUDA environment for all users
+    - apt-get install -y cuda-toolkit-12-8 nvidia-driver-570
     - |
       cat <<'EOF' > /etc/profile.d/cuda.sh
-      export PATH=/usr/local/cuda-13.2/bin:$PATH
-      export LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64:$LD_LIBRARY_PATH
-      export CUDA_HOME=/usr/local/cuda-13.2
+      export PATH=/usr/local/cuda-12.8/bin:$PATH
+      export LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64:$LD_LIBRARY_PATH
+      export CUDA_HOME=/usr/local/cuda-12.8
       export PYOPENGL_PLATFORM=egl
       EOF
     - chmod 644 /etc/profile.d/cuda.sh
-    # Also install CUDA 12.8 toolkit (dual CUDA for spconv/cumm compilation)
-    - apt-get install -y cuda-toolkit-12-8
     # =================================================================
     # 2. Tailscale
     # =================================================================
     - curl -fsSL https://tailscale.com/install.sh | sh
     # =================================================================
-    # 3. Python 3.12 setup
+    # 3. Python 3.11 setup
     # =================================================================
     - update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
     - update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
     - curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11
     # =================================================================
-    # 4. Install ComfyUI + ComfyUI-3D-Pack (CUDA 13.x fork)
+    # 4. ComfyUI + 3D Pipeline (PyTorch 2.7.0 + cu126)
     # =================================================================
     - |
       sudo -u admin bash -c '
@@ -91,113 +87,90 @@ autoinstall:
         git clone https://github.com/comfyanonymous/ComfyUI.git /home/admin/ComfyUI
         cd /home/admin/ComfyUI
 
-        # --- Create venv inside ComfyUI ---
+        # --- Create venv ---
         python3.11 -m venv venv
         source venv/bin/activate
         pip install --upgrade pip setuptools wheel
 
-        # --- PyTorch 2.9.1 + CUDA 13.0 ---
-        pip install torch==2.9.1 torchvision==0.24.1 torchaudio==2.9.1 \
-          --extra-index-url https://download.pytorch.org/whl/cu130
+        # --- PyTorch 2.7.0 + cu126 (official 3D-Pack stack) ---
+        pip install torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 \
+          --index-url https://download.pytorch.org/whl/cu126
 
         # --- ComfyUI base requirements ---
         pip install -r requirements.txt
 
-        # --- xformers (prebuilt cu130 wheel on Linux) ---
-        pip install xformers==0.0.34 \
-          --extra-index-url https://download.pytorch.org/whl/cu130
+        # --- xformers (prebuilt cu126 wheel) ---
+        pip install xformers==0.0.30 --index-url https://download.pytorch.org/whl/cu126
 
         # ===========================================================
         # Clone all custom nodes
         # ===========================================================
         cd custom_nodes
 
-        # ---- 3D Generation & Processing ----
-        # ComfyUI-3D-Pack (CUDA 13 compatible fork) - Gaussian splatting, NeRF, mesh gen
-        git clone -b cuda13-compat https://github.com/jaiporterscott/ComfyUI-3D-Pack.git
-        # TRELLIS2 - Microsoft image-to-3D with PBR materials
+        # 3D Generation & Processing
+        git clone https://github.com/MrForExample/ComfyUI-3D-Pack.git
         git clone https://github.com/PozzettiAndrea/ComfyUI-TRELLIS2.git
-        # GeometryPack - Professional mesh ops: remesh, UV unwrap, hole fill, decimation
         git clone https://github.com/PozzettiAndrea/ComfyUI-GeometryPack.git
 
-        # ---- Rigging & Animation ----
-        # UniRig - Auto-rigging (bundles Blender + UniRig model)
+        # Rigging & Animation
         git clone https://github.com/PozzettiAndrea/ComfyUI-UniRig.git
-        # MotionCapture - Video to SMPL 3D skeletal motion capture
         git clone https://github.com/PozzettiAndrea/ComfyUI-MotionCapture.git
-        # Frame interpolation - RIFE, FILM for smooth animation
         git clone https://github.com/Fannovel16/ComfyUI-Frame-Interpolation.git
 
-        # ---- Body & Character ----
-        # SAM3DBody - 3D body mesh extraction with body-part segmentation
+        # Body & Character
         git clone https://github.com/PozzettiAndrea/ComfyUI-SAM3DBody.git
 
-        # ---- Texturing & PBR Materials ----
-        # TextureAlchemy - PBR extractor, combiner, height-to-normal
+        # Texturing & PBR
         git clone https://github.com/amtarr/ComfyUI-TextureAlchemy.git
-        # PBRFusion - Diffusion-based PBR map generation (normal, height, roughness)
         git clone https://github.com/Night1099/COMFYUI-PBRFusion4.git
 
-        # ---- ControlNet & Pose ----
-        # ControlNet Aux - OpenPose, depth, normal, canny preprocessors
+        # ControlNet & Pose
         git clone https://github.com/Fannovel16/comfyui_controlnet_aux.git
-        # IPAdapter Plus - Style transfer via reference images + FaceID
         git clone https://github.com/cubiq/ComfyUI_IPAdapter_plus.git
 
-        # ---- Segmentation ----
-        # SAM2 - Meta Segment Anything 2 for video/image segmentation
+        # Segmentation
         git clone https://github.com/kijai/ComfyUI-segment-anything-2.git
-        # GroundingDino SAM - Text-prompted segmentation ("remove the chair")
         git clone https://github.com/storyicon/comfyui_segment_anything.git
-        # Background removal
         git clone https://github.com/Jcd1230/rembg-comfyui-node.git
 
-        # ---- Upscaling ----
-        # UltimateSDUpscale - Tile-based diffusion upscaling
+        # Upscaling
         git clone --recursive https://github.com/ssitu/ComfyUI_UltimateSDUpscale.git
 
-        # ---- Essential Workflow Nodes ----
-        # Impact Pack - Face detailer, upscale pipeline (~40% of pro workflows use this)
+        # Essential Workflow
         git clone https://github.com/ltdrdata/ComfyUI-Impact-Pack.git
-        # KJNodes - Set/Get nodes, animation helpers, shape drawing
         git clone https://github.com/kijai/ComfyUI-KJNodes.git
-        # ComfyUI-Manager - Official node installer/registry
         git clone https://github.com/Comfy-Org/ComfyUI-Manager.git
-        # Video Helper Suite - Video load/save, frame extraction
         git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git
 
         # ===========================================================
-        # Install shared CUDA dependencies
+        # Shared CUDA dependencies
         # ===========================================================
 
-        # spconv/cumm (cu126 wheels, ABI forward-compatible with CUDA 13.x)
+        # spconv + cumm (prebuilt cu126)
         pip install cumm-cu126 spconv-cu126
 
-        # PyG packages (torch-scatter + torch-cluster for UniRig, SAM3DBody)
+        # PyG packages
         pip install torch-scatter torch-cluster \
-          --find-links https://data.pyg.org/whl/torch-2.9.1+cu130.html
+          --find-links https://data.pyg.org/whl/torch-2.7.0+cu126.html
 
-        # scipy first (prebuilt wheels), then gpytoolbox (needs --no-build-isolation)
+        # scipy before gpytoolbox
         pip install "scipy>=1.15.0"
         pip install --no-build-isolation gpytoolbox
 
-        # rembg with GPU (onnxruntime-gpu for CUDA-accelerated background removal)
-        pip install "rembg[gpu]"
-
-        # insightface (needed by IPAdapter FaceID)
-        pip install insightface
+        # rembg GPU + insightface (for IPAdapter FaceID)
+        pip install "rembg[gpu]" insightface
 
         # ===========================================================
-        # Install each node's requirements
+        # Install each node requirements + build CUDA extensions
         # ===========================================================
 
-        # ComfyUI-3D-Pack (heaviest - builds pytorch3d, nvdiffrast, etc.)
+        # 3D-Pack first (heaviest)
         cd ComfyUI-3D-Pack
         pip install -r requirements.txt
         python install.py
         cd ..
 
-        # Install requirements for nodes that have them
+        # All other nodes
         for node_dir in \
           ComfyUI-Impact-Pack \
           ComfyUI-KJNodes \
@@ -225,18 +198,10 @@ autoinstall:
 
         echo "============================================"
         echo "ComfyUI + all custom nodes installed!"
-        echo "  3D:          3D-Pack, TRELLIS2, GeometryPack"
-        echo "  Rigging:     UniRig, MotionCapture"
-        echo "  Body:        SAM3DBody"
-        echo "  Textures:    TextureAlchemy, PBRFusion4"
-        echo "  ControlNet:  controlnet_aux, IPAdapter+"
-        echo "  Segment:     SAM2, GroundingDino, rembg"
-        echo "  Upscale:     UltimateSDUpscale"
-        echo "  Core:        Impact-Pack, KJNodes, Manager"
         echo "============================================"
       '
     # =================================================================
-    # 5. ComfyUI systemd service (headless, listen on port 8188)
+    # 5. ComfyUI systemd service (port 8188)
     # =================================================================
     - |
       cat <<'EOF' > /etc/systemd/system/comfyui.service
@@ -251,9 +216,9 @@ autoinstall:
       ExecStart=/home/admin/ComfyUI/venv/bin/python main.py --listen 0.0.0.0 --port 8188
       Restart=always
       RestartSec=10
-      Environment=PATH=/usr/local/cuda-13.2/bin:/home/admin/ComfyUI/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
-      Environment=LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64
-      Environment=CUDA_HOME=/usr/local/cuda-13.2
+      Environment=PATH=/usr/local/cuda-12.8/bin:/home/admin/ComfyUI/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+      Environment=LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64
+      Environment=CUDA_HOME=/usr/local/cuda-12.8
       Environment=PYOPENGL_PLATFORM=egl
 
       [Install]
@@ -282,15 +247,12 @@ autoinstall:
       Environment=ASPNETCORE_URLS=http://localhost:5000
       Environment=ASPNETCORE_ENVIRONMENT=Production
       Environment=DOTNET_PRINT_TELEMETRY_MESSAGE=false
-      Environment=PATH=/usr/local/cuda-13.2/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-      Environment=LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64
-      Environment=CUDA_HOME=/usr/local/cuda-13.2
 
       [Install]
       WantedBy=multi-user.target
       EOF
     # =================================================================
-    # 8. Nginx reverse proxy (HTTP -> HTTPS -> Kestrel)
+    # 8. Nginx reverse proxy
     # =================================================================
     - |
       cat <<'EOF' > /etc/nginx/sites-available/default

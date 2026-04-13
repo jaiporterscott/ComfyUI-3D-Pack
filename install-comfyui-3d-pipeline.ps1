@@ -2,8 +2,8 @@
 <#
 .SYNOPSIS
     ComfyUI + 3D Pipeline - Full Windows Installer
-    Installs Python 3.11, Git, VS 2022 Build Tools, CUDA 13.2 + 12.8,
-    ComfyUI, and 20 custom nodes for a complete text-to-3D pipeline.
+    Installs Python 3.11, Git, VS 2022 Build Tools, ComfyUI, and 20 custom
+    nodes for a complete text-to-3D pipeline using PyTorch 2.7.0 + CUDA 12.8.
 
 .DESCRIPTION
     Run as Administrator:
@@ -11,21 +11,26 @@
       Set-ExecutionPolicy Bypass -Scope Process -Force
       .\install-comfyui-3d-pipeline.ps1
 
+    Install into existing ComfyUI (e.g. StabilityMatrix):
+      .\install-comfyui-3d-pipeline.ps1 -InstallDir "E:\StabilityMatrix\Packages\ComfyUI" -SkipComfyUI
+
     Optional flags:
-      -InstallDir "D:\ComfyUI"        # Custom install location
-      -SkipCUDA                        # Skip CUDA toolkit install (if already installed)
-      -SkipPython                      # Skip Python install (if 3.11 already installed)
-      -SkipVS                          # Skip VS Build Tools (if already installed)
-      -SkipGit                         # Skip Git install (if already installed)
+      -InstallDir "D:\ComfyUI"   Custom install location
+      -SkipComfyUI               Don't clone ComfyUI (use existing install)
+      -SkipCUDA                  Skip CUDA toolkit prompt
+      -SkipPython                Skip Python install
+      -SkipVS                    Skip VS Build Tools
+      -SkipGit                   Skip Git install
 
 .NOTES
-    Requires: Windows 10/11, NVIDIA GPU, Internet connection, Admin rights
+    Requires: Windows 10/11, NVIDIA GPU (driver 528+), Internet, Admin rights
+    Uses: PyTorch 2.7.0 + cu126, official ComfyUI-3D-Pack repo
     Install time: 30-90 minutes depending on internet speed
-    Disk space: ~30 GB (CUDA toolkits + Python + ComfyUI + models)
 #>
 
 param(
     [string]$InstallDir = "$env:USERPROFILE\ComfyUI",
+    [switch]$SkipComfyUI,
     [switch]$SkipCUDA,
     [switch]$SkipPython,
     [switch]$SkipVS,
@@ -33,21 +38,25 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$ProgressPreference = "SilentlyContinue"  # Speed up Invoke-WebRequest
+$ProgressPreference = "SilentlyContinue"
 
 # =====================================================================
-# Configuration
+# Configuration - Official 3D-Pack stack (known working)
 # =====================================================================
-$PYTHON_VERSION   = "3.11.9"  # Last 3.11.x with Windows installer (3.11.10+ are source-only)
-$PYTHON_URL       = "https://www.python.org/ftp/python/$PYTHON_VERSION/python-$PYTHON_VERSION-amd64.exe"
-$GIT_URL          = "https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.2/Git-2.47.1.2-64-bit.exe"
+$PYTHON_VERSION    = "3.11.9"
+$PYTHON_URL        = "https://www.python.org/ftp/python/$PYTHON_VERSION/python-$PYTHON_VERSION-amd64.exe"
+$GIT_URL           = "https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.2/Git-2.47.1.2-64-bit.exe"
 $VS_BUILDTOOLS_URL = "https://aka.ms/vs/17/release/vs_BuildTools.exe"
-$DOWNLOADS_DIR    = "$env:TEMP\comfyui-installer"
-$VENV_DIR         = "$InstallDir\venv"
+$DOWNLOADS_DIR     = "$env:TEMP\comfyui-installer"
 
-# CUDA paths
-$CUDA_13_HOME     = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.2"
-$CUDA_12_HOME     = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8"
+# PyTorch stack (matches official ComfyUI-3D-Pack)
+$TORCH_VERSION     = "2.7.0"
+$TORCHVISION_VER   = "0.22.0"
+$TORCHAUDIO_VER    = "2.7.0"
+$XFORMERS_VER      = "0.0.30"
+$CU_TAG            = "cu126"
+$TORCH_INDEX       = "https://download.pytorch.org/whl/$CU_TAG"
+$PYG_LINKS         = "https://data.pyg.org/whl/torch-$TORCH_VERSION+$CU_TAG.html"
 
 # =====================================================================
 # Helper functions
@@ -59,13 +68,10 @@ function Write-Err  { param([string]$msg) Write-Host "  [ERROR] $msg" -Foregroun
 
 function Download-File {
     param([string]$Url, [string]$OutFile)
-    if (Test-Path $OutFile) {
-        Write-OK "$OutFile already downloaded"
-        return
-    }
-    Write-Host "  Downloading $Url ..."
+    if (Test-Path $OutFile) { Write-OK "Already downloaded: $(Split-Path $OutFile -Leaf)"; return }
+    Write-Host "  Downloading $(Split-Path $OutFile -Leaf)..."
     Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing
-    Write-OK "Downloaded to $OutFile"
+    Write-OK "Downloaded"
 }
 
 function Refresh-Path {
@@ -73,199 +79,190 @@ function Refresh-Path {
                 [System.Environment]::GetEnvironmentVariable("Path", "User")
 }
 
+# Detect existing venv (StabilityMatrix uses its own)
+function Find-Venv {
+    # Check common venv locations
+    $candidates = @(
+        "$InstallDir\venv",
+        "$InstallDir\.venv",
+        "$InstallDir\python_embeded"  # StabilityMatrix embedded Python
+    )
+    foreach ($c in $candidates) {
+        if (Test-Path "$c\Scripts\python.exe") { return $c }
+    }
+    return $null
+}
+
 # =====================================================================
-# Pre-flight checks
+# Pre-flight
 # =====================================================================
 Write-Step "Pre-flight checks"
 
-# Check admin
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Write-Err "This script must be run as Administrator"
-    exit 1
+    Write-Err "This script must be run as Administrator"; exit 1
 }
 
-# Check NVIDIA GPU
 $gpu = Get-CimInstance Win32_VideoController | Where-Object { $_.Name -match "NVIDIA" }
-if (-not $gpu) {
-    Write-Err "No NVIDIA GPU detected. This installer requires an NVIDIA GPU."
-    exit 1
-}
-Write-OK "NVIDIA GPU found: $($gpu.Name)"
+if (-not $gpu) { Write-Err "No NVIDIA GPU detected."; exit 1 }
+Write-OK "GPU: $($gpu.Name)"
 
-# Create directories
 New-Item -ItemType Directory -Path $DOWNLOADS_DIR -Force | Out-Null
-New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-Write-OK "Install directory: $InstallDir"
+Write-OK "Install dir: $InstallDir"
 
 # =====================================================================
-# 1. Install Git
+# 1. Git
 # =====================================================================
 if (-not $SkipGit) {
-    Write-Step "1/6 Installing Git"
-    $gitCheck = Get-Command git -ErrorAction SilentlyContinue
-    if ($gitCheck) {
+    Write-Step "1/6 Git"
+    if (Get-Command git -ErrorAction SilentlyContinue) {
         Write-OK "Git already installed: $(git --version)"
     } else {
-        $gitInstaller = "$DOWNLOADS_DIR\git-installer.exe"
-        Download-File $GIT_URL $gitInstaller
-        Write-Host "  Installing Git (silent)..."
-        Start-Process -FilePath $gitInstaller -ArgumentList "/VERYSILENT /NORESTART /NOCANCEL /SP- /CLOSEAPPLICATIONS" -Wait
+        $inst = "$DOWNLOADS_DIR\git-installer.exe"
+        Download-File $GIT_URL $inst
+        Start-Process -FilePath $inst -ArgumentList "/VERYSILENT /NORESTART /NOCANCEL /SP- /CLOSEAPPLICATIONS" -Wait
         Refresh-Path
         Write-OK "Git installed"
     }
-} else { Write-Step "1/6 Skipping Git (--SkipGit)" }
+} else { Write-Step "1/6 Skipping Git" }
 
 # =====================================================================
-# 2. Install Python 3.11
+# 2. Python 3.11
 # =====================================================================
 if (-not $SkipPython) {
-    Write-Step "2/6 Installing Python $PYTHON_VERSION"
-    $pyCheck = Get-Command python -ErrorAction SilentlyContinue
-    $pyVer = if ($pyCheck) { & python --version 2>&1 } else { "" }
+    Write-Step "2/6 Python $PYTHON_VERSION"
+    $pyVer = try { & python --version 2>&1 } catch { "" }
     if ($pyVer -match "3\.11") {
-        Write-OK "Python 3.11 already installed: $pyVer"
+        Write-OK "Python 3.11 already installed"
     } else {
-        $pyInstaller = "$DOWNLOADS_DIR\python-$PYTHON_VERSION-amd64.exe"
-        Download-File $PYTHON_URL $pyInstaller
-        Write-Host "  Installing Python $PYTHON_VERSION (silent)..."
-        Start-Process -FilePath $pyInstaller -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1 Include_test=0 Include_launcher=1" -Wait
+        $inst = "$DOWNLOADS_DIR\python-$PYTHON_VERSION-amd64.exe"
+        Download-File $PYTHON_URL $inst
+        Start-Process -FilePath $inst -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1 Include_test=0 Include_launcher=1" -Wait
         Refresh-Path
         Write-OK "Python $PYTHON_VERSION installed"
     }
-} else { Write-Step "2/6 Skipping Python (--SkipPython)" }
+} else { Write-Step "2/6 Skipping Python" }
 
 # =====================================================================
-# 3. Install Visual Studio 2022 Build Tools
+# 3. VS 2022 Build Tools
 # =====================================================================
 if (-not $SkipVS) {
-    Write-Step "3/6 Installing VS 2022 Build Tools (C++ workload)"
-    $vsCheck = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\VisualStudio\SxS\VS7" -ErrorAction SilentlyContinue
-    $vsInstalled = Test-Path "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools" -ErrorAction SilentlyContinue
-    $vsInstalled2 = Test-Path "C:\Program Files\Microsoft Visual Studio\2022\*\VC\Tools\MSVC" -ErrorAction SilentlyContinue
-    if ($vsInstalled -or $vsInstalled2) {
+    Write-Step "3/6 VS 2022 Build Tools"
+    $vsExists = (Test-Path "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools") -or
+                (Test-Path "C:\Program Files\Microsoft Visual Studio\2022\*\VC\Tools\MSVC")
+    if ($vsExists) {
         Write-OK "VS Build Tools already installed"
     } else {
-        $vsInstaller = "$DOWNLOADS_DIR\vs_BuildTools.exe"
-        Download-File $VS_BUILDTOOLS_URL $vsInstaller
-        Write-Host "  Installing VS Build Tools (this may take 10-20 minutes)..."
-        Start-Process -FilePath $vsInstaller -ArgumentList "--quiet --wait --norestart --nocache --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended" -Wait
-        Write-OK "VS 2022 Build Tools installed"
+        $inst = "$DOWNLOADS_DIR\vs_BuildTools.exe"
+        Download-File $VS_BUILDTOOLS_URL $inst
+        Write-Host "  Installing (10-20 min)..."
+        Start-Process -FilePath $inst -ArgumentList "--quiet --wait --norestart --nocache --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended" -Wait
+        Write-OK "VS Build Tools installed"
     }
-} else { Write-Step "3/6 Skipping VS Build Tools (--SkipVS)" }
+} else { Write-Step "3/6 Skipping VS Build Tools" }
 
 # =====================================================================
-# 4. Install CUDA Toolkits (13.2 + 12.8)
+# 4. CUDA Toolkit
 # =====================================================================
 if (-not $SkipCUDA) {
-    Write-Step "4/6 Installing CUDA Toolkits"
-
-    # Check if CUDA 13.2 is already installed
-    if (Test-Path "$CUDA_13_HOME\bin\nvcc.exe") {
-        Write-OK "CUDA 13.2 already installed at $CUDA_13_HOME"
-    } else {
-        Write-Warn "CUDA 13.2 toolkit must be downloaded from NVIDIA manually."
-        Write-Warn "Download from: https://developer.nvidia.com/cuda-downloads"
-        Write-Warn "Select: Windows -> x86_64 -> 11 -> exe (local)"
-        Write-Warn "After downloading, run: cuda_13.2.X_windows.exe -s"
-        Write-Host ""
-        $response = Read-Host "  Press Enter after installing CUDA 13.2, or type 'skip' to continue without it"
-        if ($response -ne "skip") {
-            Refresh-Path
-            if (Test-Path "$CUDA_13_HOME\bin\nvcc.exe") {
-                Write-OK "CUDA 13.2 detected after install"
-            } else {
-                Write-Warn "CUDA 13.2 not detected - CUDA extensions may not build correctly"
-            }
+    Write-Step "4/6 CUDA Toolkit"
+    $cudaFound = $false
+    # Check for any CUDA 12.x
+    foreach ($v in @("v12.8","v12.6","v12.4","v12.1")) {
+        $p = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\$v"
+        if (Test-Path "$p\bin\nvcc.exe") { Write-OK "CUDA found: $p"; $cudaFound = $true; break }
+    }
+    if (-not $cudaFound) {
+        # Check if nvcc is in PATH
+        if (Get-Command nvcc -ErrorAction SilentlyContinue) {
+            Write-OK "CUDA found in PATH: $(nvcc --version | Select-String 'release')"
+            $cudaFound = $true
         }
     }
-
-    # Check if CUDA 12.8 is already installed (dual CUDA for spconv)
-    if (Test-Path "$CUDA_12_HOME\bin\nvcc.exe") {
-        Write-OK "CUDA 12.8 already installed at $CUDA_12_HOME (dual CUDA ready)"
-    } else {
-        Write-Warn "CUDA 12.8 toolkit recommended for spconv/cumm compilation."
-        Write-Warn "Download from: https://developer.nvidia.com/cuda-12-8-0-download-archive"
-        Write-Warn "Install alongside CUDA 13.2 (both can coexist)."
+    if (-not $cudaFound) {
+        Write-Warn "No CUDA 12.x toolkit detected."
+        Write-Warn "Download CUDA 12.8 from: https://developer.nvidia.com/cuda-12-8-0-download-archive"
+        Write-Warn "Run installer with default options, then re-run this script."
         Write-Host ""
-        $response = Read-Host "  Press Enter after installing CUDA 12.8, or type 'skip'"
+        Read-Host "  Press Enter after installing CUDA, or Ctrl+C to exit"
+        Refresh-Path
     }
-} else { Write-Step "4/6 Skipping CUDA (--SkipCUDA)" }
+} else { Write-Step "4/6 Skipping CUDA" }
 
 # =====================================================================
-# 5. Set environment variables
+# 5. Environment variables
 # =====================================================================
-Write-Step "5/6 Setting environment variables"
-
-# CUDA 13.2 as primary
-if (Test-Path $CUDA_13_HOME) {
-    [Environment]::SetEnvironmentVariable("CUDA_HOME", $CUDA_13_HOME, "User")
-    [Environment]::SetEnvironmentVariable("CUDA_PATH", $CUDA_13_HOME, "User")
-    $env:CUDA_HOME = $CUDA_13_HOME
-    $env:CUDA_PATH = $CUDA_13_HOME
-    Write-OK "CUDA_HOME set to $CUDA_13_HOME"
-}
-
-# MSVC conformant preprocessor for CCCL (CUDA 13+)
-$existingCxxFlags = [Environment]::GetEnvironmentVariable("CXXFLAGS", "User")
-if ($existingCxxFlags -notmatch "/Zc:preprocessor") {
-    $newFlags = if ($existingCxxFlags) { "$existingCxxFlags /Zc:preprocessor" } else { "/Zc:preprocessor" }
-    [Environment]::SetEnvironmentVariable("CXXFLAGS", $newFlags, "User")
-    $env:CXXFLAGS = $newFlags
-    Write-OK "CXXFLAGS set: /Zc:preprocessor"
-}
-
+Write-Step "5/6 Environment"
 Refresh-Path
+Write-OK "PATH refreshed"
 
 # =====================================================================
-# 6. Install ComfyUI + All Custom Nodes
+# 6. ComfyUI + Nodes + Dependencies
 # =====================================================================
-Write-Step "6/6 Installing ComfyUI + 3D Pipeline"
+Write-Step "6/6 ComfyUI + 3D Pipeline"
 
-# Clone ComfyUI
-if (-not (Test-Path "$InstallDir\.git")) {
-    Write-Host "  Cloning ComfyUI..."
-    git clone https://github.com/comfyanonymous/ComfyUI.git $InstallDir
+# --- Clone or detect ComfyUI ---
+if (-not $SkipComfyUI) {
+    if (-not (Test-Path "$InstallDir\.git") -and -not (Test-Path "$InstallDir\main.py")) {
+        Write-Host "  Cloning ComfyUI..."
+        git clone https://github.com/comfyanonymous/ComfyUI.git $InstallDir
+    } else {
+        Write-OK "ComfyUI already exists at $InstallDir"
+    }
 }
+
+if (-not (Test-Path "$InstallDir\main.py")) {
+    Write-Err "ComfyUI not found at $InstallDir. Use -InstallDir to specify location."
+    exit 1
+}
+
 Set-Location $InstallDir
 
-# Create Python venv
-if (-not (Test-Path "$VENV_DIR\Scripts\python.exe")) {
-    Write-Host "  Creating Python 3.11 virtual environment..."
+# --- Find or create venv ---
+$existingVenv = Find-Venv
+if ($existingVenv) {
+    $VENV_DIR = $existingVenv
+    Write-OK "Using existing venv: $VENV_DIR"
+} else {
+    $VENV_DIR = "$InstallDir\venv"
+    Write-Host "  Creating Python 3.11 venv..."
     python -m venv $VENV_DIR
+    Write-OK "Created venv: $VENV_DIR"
 }
 
-# Activate venv for all subsequent commands
 $pip = "$VENV_DIR\Scripts\pip.exe"
 $python = "$VENV_DIR\Scripts\python.exe"
 
-Write-Host "  Upgrading pip..."
-& $python -m pip install --upgrade pip setuptools wheel
+# --- Upgrade pip ---
+& $python -m pip install --upgrade pip setuptools wheel 2>&1 | Out-Null
+Write-OK "pip upgraded"
 
-# --- PyTorch 2.9.1 + CUDA 13.0 ---
-Write-Host "  Installing PyTorch 2.9.1 + cu130..."
-& $pip install torch==2.9.1 torchvision==0.24.1 torchaudio==2.9.1 --extra-index-url https://download.pytorch.org/whl/cu130
+# --- PyTorch 2.7.0 + cu126 ---
+Write-Host "  Installing PyTorch $TORCH_VERSION + $CU_TAG..."
+& $pip install "torch==$TORCH_VERSION" "torchvision==$TORCHVISION_VER" "torchaudio==$TORCHAUDIO_VER" --index-url $TORCH_INDEX
+Write-OK "PyTorch installed"
 
 # --- ComfyUI requirements ---
-Write-Host "  Installing ComfyUI requirements..."
-& $pip install -r "$InstallDir\requirements.txt"
-
-# --- xformers (build from source on Windows + CUDA 13) ---
-Write-Host "  Building xformers from source (Windows + CUDA 13, may take 10-30 min)..."
-& $pip install -v --no-build-isolation "git+https://github.com/facebookresearch/xformers.git@main#egg=xformers"
-if ($LASTEXITCODE -ne 0) {
-    Write-Warn "xformers build failed - trying prebuilt wheel as fallback..."
-    & $pip install xformers==0.0.34 --extra-index-url https://download.pytorch.org/whl/cu130
+if (Test-Path "$InstallDir\requirements.txt") {
+    Write-Host "  Installing ComfyUI requirements..."
+    & $pip install -r "$InstallDir\requirements.txt" 2>&1 | Out-Null
+    Write-OK "ComfyUI requirements installed"
 }
+
+# --- xformers (prebuilt cu126 wheel, no source build needed) ---
+Write-Host "  Installing xformers $XFORMERS_VER..."
+& $pip install "xformers==$XFORMERS_VER" --index-url $TORCH_INDEX
+Write-OK "xformers installed"
 
 # ===========================================================
 # Clone all custom nodes
 # ===========================================================
 $nodesDir = "$InstallDir\custom_nodes"
+if (-not (Test-Path $nodesDir)) { New-Item -ItemType Directory -Path $nodesDir -Force | Out-Null }
 Set-Location $nodesDir
 
 $nodes = @(
     # 3D Generation & Processing
-    @{ Name = "ComfyUI-3D-Pack";               Url = "https://github.com/jaiporterscott/ComfyUI-3D-Pack.git"; Branch = "cuda13-compat" },
+    @{ Name = "ComfyUI-3D-Pack";               Url = "https://github.com/MrForExample/ComfyUI-3D-Pack.git" },
     @{ Name = "ComfyUI-TRELLIS2";              Url = "https://github.com/PozzettiAndrea/ComfyUI-TRELLIS2.git" },
     @{ Name = "ComfyUI-GeometryPack";          Url = "https://github.com/PozzettiAndrea/ComfyUI-GeometryPack.git" },
 
@@ -300,55 +297,63 @@ $nodes = @(
     @{ Name = "ComfyUI-VideoHelperSuite";      Url = "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git" }
 )
 
+Write-Host "  Cloning custom nodes..."
 foreach ($node in $nodes) {
     $nodePath = "$nodesDir\$($node.Name)"
     if (Test-Path $nodePath) {
-        Write-OK "$($node.Name) already cloned"
+        Write-OK "$($node.Name) exists"
     } else {
+        $gitArgs = @("clone")
+        if ($node.Branch) { $gitArgs += "-b"; $gitArgs += $node.Branch }
+        if ($node.Recursive) { $gitArgs += "--recursive" }
+        $gitArgs += $node.Url
+        $gitArgs += $nodePath
         Write-Host "  Cloning $($node.Name)..."
-        $args = @("clone")
-        if ($node.Branch) { $args += "-b"; $args += $node.Branch }
-        if ($node.Recursive) { $args += "--recursive" }
-        $args += $node.Url
-        $args += $nodePath
-        & git @args
+        & git @gitArgs 2>&1 | Out-Null
     }
 }
+Write-OK "All nodes cloned"
 
 # ===========================================================
-# Install shared CUDA dependencies
+# Shared dependencies
 # ===========================================================
-Write-Host "`n  Installing shared CUDA dependencies..."
+Write-Host "`n  Installing shared dependencies..."
 
-# spconv/cumm (cu126, ABI forward-compatible with CUDA 13.x)
-& $pip install cumm-cu126 spconv-cu126
+# spconv + cumm (prebuilt cu126)
+& $pip install cumm-cu126 spconv-cu126 2>&1 | Out-Null
+Write-OK "spconv + cumm"
 
-# PyG packages
-& $pip install torch-scatter torch-cluster --find-links https://data.pyg.org/whl/torch-2.9.1+cu130.html
+# PyG packages (torch-scatter + torch-cluster)
+& $pip install torch-scatter torch-cluster --find-links $PYG_LINKS 2>&1 | Out-Null
+Write-OK "torch-scatter + torch-cluster"
 
-# scipy before gpytoolbox
-& $pip install "scipy>=1.15.0"
-& $pip install --no-build-isolation gpytoolbox
+# scipy first, then gpytoolbox with --no-build-isolation
+& $pip install "scipy>=1.15.0" 2>&1 | Out-Null
+& $pip install --no-build-isolation gpytoolbox 2>&1 | Out-Null
+Write-OK "scipy + gpytoolbox"
 
-# rembg with GPU
-& $pip install "rembg[gpu]"
-
-# insightface for IPAdapter FaceID
-& $pip install insightface
+# rembg GPU + insightface
+& $pip install "rembg[gpu]" 2>&1 | Out-Null
+& $pip install insightface 2>&1 | Out-Null
+Write-OK "rembg[gpu] + insightface"
 
 # ===========================================================
 # Install each node's requirements
 # ===========================================================
 Write-Host "`n  Installing node requirements..."
 
-# 3D-Pack first (heaviest)
-Set-Location "$nodesDir\ComfyUI-3D-Pack"
-& $pip install -r requirements.txt
-& $python install.py
-Set-Location $nodesDir
+# 3D-Pack first (heaviest - builds pytorch3d, nvdiffrast, etc.)
+if (Test-Path "$nodesDir\ComfyUI-3D-Pack") {
+    Write-Host "  [1/15] ComfyUI-3D-Pack (this takes a while)..."
+    Set-Location "$nodesDir\ComfyUI-3D-Pack"
+    if (Test-Path "requirements.txt") { & $pip install -r requirements.txt 2>&1 | Out-Null }
+    if (Test-Path "install.py") { & $python install.py 2>&1 | Out-Null }
+    Set-Location $nodesDir
+    Write-OK "ComfyUI-3D-Pack"
+}
 
 # All other nodes
-$nodeInstallOrder = @(
+$otherNodes = @(
     "ComfyUI-Impact-Pack",
     "ComfyUI-KJNodes",
     "ComfyUI-VideoHelperSuite",
@@ -365,25 +370,27 @@ $nodeInstallOrder = @(
     "COMFYUI-PBRFusion4"
 )
 
-foreach ($nodeDir in $nodeInstallOrder) {
+$i = 2
+foreach ($nodeDir in $otherNodes) {
     $nodePath = "$nodesDir\$nodeDir"
-    if (Test-Path "$nodePath\requirements.txt") {
-        Write-Host "  Installing requirements for $nodeDir..."
-        & $pip install -r "$nodePath\requirements.txt" 2>&1 | Out-Null
+    if (Test-Path $nodePath) {
+        Write-Host "  [$i/15] $nodeDir..."
+        if (Test-Path "$nodePath\requirements.txt") {
+            & $pip install -r "$nodePath\requirements.txt" 2>&1 | Out-Null
+        }
+        if (Test-Path "$nodePath\install.py") {
+            Set-Location $nodePath
+            & $python install.py 2>&1 | Out-Null
+            Set-Location $nodesDir
+        }
+        Write-OK $nodeDir
     }
-    if (Test-Path "$nodePath\install.py") {
-        Write-Host "  Running install.py for $nodeDir..."
-        Set-Location $nodePath
-        & $python install.py 2>&1 | Out-Null
-        Set-Location $nodesDir
-    }
+    $i++
 }
 
 # ===========================================================
 # Create launch script
 # ===========================================================
-Write-Host "`n  Creating launch script..."
-
 $launchScript = @"
 @echo off
 title ComfyUI - 3D Pipeline
@@ -396,14 +403,15 @@ pause
 Set-Content -Path "$InstallDir\run_comfyui.bat" -Value $launchScript
 
 # Desktop shortcut
-$desktopPath = [Environment]::GetFolderPath("Desktop")
-$shortcutPath = "$desktopPath\ComfyUI 3D Pipeline.lnk"
-$shell = New-Object -ComObject WScript.Shell
-$shortcut = $shell.CreateShortcut($shortcutPath)
-$shortcut.TargetPath = "$InstallDir\run_comfyui.bat"
-$shortcut.WorkingDirectory = $InstallDir
-$shortcut.Description = "ComfyUI with 3D Pipeline nodes"
-$shortcut.Save()
+try {
+    $desktopPath = [Environment]::GetFolderPath("Desktop")
+    $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut("$desktopPath\ComfyUI 3D Pipeline.lnk")
+    $shortcut.TargetPath = "$InstallDir\run_comfyui.bat"
+    $shortcut.WorkingDirectory = $InstallDir
+    $shortcut.Description = "ComfyUI with 3D Pipeline nodes"
+    $shortcut.Save()
+    Write-OK "Desktop shortcut created"
+} catch { Write-Warn "Could not create desktop shortcut" }
 
 # =====================================================================
 # Done!
@@ -415,24 +423,22 @@ Write-Host "============================================" -ForegroundColor Green
 Write-Host "  INSTALLATION COMPLETE!" -ForegroundColor Green
 Write-Host "============================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "  Install location: $InstallDir" -ForegroundColor White
-Write-Host "  Python venv:      $VENV_DIR" -ForegroundColor White
-Write-Host "  Launch:            $InstallDir\run_comfyui.bat" -ForegroundColor White
-Write-Host "  Desktop shortcut:  ComfyUI 3D Pipeline" -ForegroundColor White
-Write-Host "  URL:               http://localhost:8188" -ForegroundColor White
+Write-Host "  Location:  $InstallDir" -ForegroundColor White
+Write-Host "  Venv:      $VENV_DIR" -ForegroundColor White
+Write-Host "  PyTorch:   $TORCH_VERSION + $CU_TAG" -ForegroundColor White
+Write-Host "  Python:    3.11" -ForegroundColor White
+Write-Host "  Launch:    $InstallDir\run_comfyui.bat" -ForegroundColor White
+Write-Host "  URL:       http://localhost:8188" -ForegroundColor White
 Write-Host ""
-Write-Host "  Installed nodes (20):" -ForegroundColor Cyan
-Write-Host "    3D:          3D-Pack, TRELLIS2, GeometryPack"
-Write-Host "    Rigging:     UniRig, MotionCapture, Frame-Interpolation"
-Write-Host "    Body:        SAM3DBody"
-Write-Host "    Textures:    TextureAlchemy, PBRFusion4"
-Write-Host "    ControlNet:  controlnet_aux, IPAdapter+"
-Write-Host "    Segment:     SAM2, GroundingDino, rembg"
-Write-Host "    Upscale:     UltimateSDUpscale"
-Write-Host "    Core:        Impact-Pack, KJNodes, Manager, VideoHelper"
+Write-Host "  20 nodes installed:" -ForegroundColor Cyan
+Write-Host "    3D:        3D-Pack, TRELLIS2, GeometryPack"
+Write-Host "    Rigging:   UniRig, MotionCapture, Frame-Interpolation"
+Write-Host "    Body:      SAM3DBody"
+Write-Host "    Textures:  TextureAlchemy, PBRFusion4"
+Write-Host "    Control:   controlnet_aux, IPAdapter+"
+Write-Host "    Segment:   SAM2, GroundingDino, rembg"
+Write-Host "    Upscale:   UltimateSDUpscale"
+Write-Host "    Core:      Impact-Pack, KJNodes, Manager, VideoHelper"
 Write-Host ""
-Write-Host "  Next steps:" -ForegroundColor Yellow
-Write-Host "    1. Download model checkpoints (Flux, SDXL, etc.) to $InstallDir\models\"
-Write-Host "    2. Double-click 'ComfyUI 3D Pipeline' on your desktop"
-Write-Host "    3. Open http://localhost:8188 in your browser"
+Write-Host "  Next: download models to $InstallDir\models\" -ForegroundColor Yellow
 Write-Host ""
