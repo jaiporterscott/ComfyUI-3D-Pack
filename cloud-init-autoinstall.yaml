@@ -1,0 +1,229 @@
+#cloud-config
+autoinstall:
+  version: 1
+  interactive-sections:
+    - none
+  identity:
+    hostname: ai-pipeline-server
+    username: admin
+    # Hashed password for "admin123" (Generate yours with: openssl passwd -6)
+    password: "$6$exDY1mhS4KUYCE/2$zmn9ToZwTKLhCw.b4/b.ZRTIZM30JZ4QrOQ2aOXJ8yk96xpcCof0kxKwuX1kqLG/ygbJ1f8wxED22bTL4F46P0"
+  ssh:
+    install-server: true
+    allow-pw: true
+  storage:
+    layout:
+      name: direct
+  package_upgrade: true
+  packages:
+    - curl
+    - wget
+    - git
+    - build-essential
+    - nginx
+    - openssh-server
+    - dotnet-sdk-8.0
+    - aspnetcore-runtime-8.0
+    # ---- Python 3.12 (recommended for ComfyUI-3D-Pack) ----
+    - python3.12
+    - python3.12-dev
+    - python3.12-venv
+    - python3-pip
+    # ---- Build tools for CUDA extensions ----
+    - cmake
+    - ninja-build
+    - ffmpeg
+    # ---- OpenGL / EGL / Mesa (required by nvdiffrast, pytorch3d, open3d) ----
+    - libegl1
+    - libegl1-mesa-dev
+    - libgl1
+    - libgl1-mesa-dev
+    - libgl1-mesa-glx
+    - libgles2
+    - libgles2-mesa-dev
+    - libglib2.0-0
+    - libglvnd-dev
+    - libglvnd0
+    - libglx0
+    - libsm6
+    - libxext6
+    - libxrender1
+    # ---- Fortran compiler (needed if any package builds scipy from source) ----
+    - gfortran
+  runcmd:
+    # =================================================================
+    # 1. NVIDIA CUDA 13.2 + Driver 595 (RTX Pro 4000 / Ada Lovelace)
+    # =================================================================
+    # CUDA 13.2 requires driver >= 595.45.04
+    - wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+    - dpkg -i cuda-keyring_1.1-1_all.deb
+    - apt-get update
+    - apt-get install -y cuda-toolkit-13-2 nvidia-driver-595
+    # Set CUDA environment for all users
+    - |
+      cat <<'EOF' > /etc/profile.d/cuda.sh
+      export PATH=/usr/local/cuda-13.2/bin:$PATH
+      export LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64:$LD_LIBRARY_PATH
+      export CUDA_HOME=/usr/local/cuda-13.2
+      export PYOPENGL_PLATFORM=egl
+      EOF
+    - chmod 644 /etc/profile.d/cuda.sh
+    # Also install CUDA 12.8 toolkit (dual CUDA for spconv/cumm compilation)
+    - apt-get install -y cuda-toolkit-12-8
+    # =================================================================
+    # 2. Tailscale
+    # =================================================================
+    - curl -fsSL https://tailscale.com/install.sh | sh
+    # =================================================================
+    # 3. Python 3.12 setup
+    # =================================================================
+    - update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
+    - update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1
+    - curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12
+    # =================================================================
+    # 4. Install ComfyUI + ComfyUI-3D-Pack (CUDA 13.x fork)
+    # =================================================================
+    - |
+      sudo -u admin bash -c '
+        source /etc/profile.d/cuda.sh
+
+        # --- Clone ComfyUI ---
+        git clone https://github.com/comfyanonymous/ComfyUI.git /home/admin/ComfyUI
+        cd /home/admin/ComfyUI
+
+        # --- Create venv inside ComfyUI ---
+        python3.12 -m venv venv
+        source venv/bin/activate
+        pip install --upgrade pip setuptools wheel
+
+        # --- PyTorch 2.9.1 + CUDA 13.0 ---
+        pip install torch==2.9.1 torchvision==0.24.1 torchaudio==2.9.1 \
+          --extra-index-url https://download.pytorch.org/whl/cu130
+
+        # --- ComfyUI base requirements ---
+        pip install -r requirements.txt
+
+        # --- xformers (prebuilt cu130 wheel on Linux) ---
+        pip install xformers==0.0.34 \
+          --extra-index-url https://download.pytorch.org/whl/cu130
+
+        # --- Clone ComfyUI-3D-Pack (CUDA 13 compatible fork) ---
+        cd custom_nodes
+        git clone -b cuda13-compat https://github.com/jaiporterscott/ComfyUI-3D-Pack.git
+
+        # --- spconv/cumm (cu126 wheels, ABI forward-compatible with CUDA 13.x) ---
+        pip install cumm-cu126 spconv-cu126
+
+        # --- torch-scatter (cu130 wheels from PyG) ---
+        pip install torch-scatter \
+          --find-links https://data.pyg.org/whl/torch-2.9.1+cu130.html
+
+        # --- scipy (pinned >=1.15 for Py3.12 wheels, installed before gpytoolbox) ---
+        pip install "scipy>=1.15.0"
+
+        # --- gpytoolbox (--no-build-isolation to use system scipy) ---
+        pip install --no-build-isolation gpytoolbox
+
+        # --- ComfyUI-3D-Pack base requirements ---
+        cd ComfyUI-3D-Pack
+        pip install -r requirements.txt
+
+        # --- Build CUDA extensions (pytorch3d, nvdiffrast, diff-gaussian-rasterization) ---
+        # install.py auto-detects CUDA 13.2 and handles the dual CUDA approach
+        python install.py
+
+        echo "ComfyUI + 3D-Pack installation complete!"
+      '
+    # =================================================================
+    # 5. ComfyUI systemd service (headless, listen on port 8188)
+    # =================================================================
+    - |
+      cat <<'EOF' > /etc/systemd/system/comfyui.service
+      [Unit]
+      Description=ComfyUI Server
+      After=network.target nvidia-persistenced.service
+
+      [Service]
+      Type=simple
+      User=admin
+      WorkingDirectory=/home/admin/ComfyUI
+      ExecStart=/home/admin/ComfyUI/venv/bin/python main.py --listen 0.0.0.0 --port 8188
+      Restart=always
+      RestartSec=10
+      Environment=PATH=/usr/local/cuda-13.2/bin:/home/admin/ComfyUI/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+      Environment=LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64
+      Environment=CUDA_HOME=/usr/local/cuda-13.2
+      Environment=PYOPENGL_PLATFORM=egl
+
+      [Install]
+      WantedBy=multi-user.target
+      EOF
+    # =================================================================
+    # 6. Deployment directory
+    # =================================================================
+    - mkdir -p /var/www/world-forge
+    - chown admin:admin /var/www/world-forge
+    # =================================================================
+    # 7. .NET App systemd service
+    # =================================================================
+    - |
+      cat <<'EOF' > /etc/systemd/system/world-forge.service
+      [Unit]
+      Description=.NET AI Pipeline Service
+      After=network.target nvidia-persistenced.service
+
+      [Service]
+      WorkingDirectory=/var/www/world-forge
+      ExecStart=/usr/bin/dotnet /var/www/world-forge/WorldForge.Blazor.dll
+      Restart=always
+      RestartSec=10
+      User=admin
+      Environment=ASPNETCORE_URLS=http://localhost:5000
+      Environment=ASPNETCORE_ENVIRONMENT=Production
+      Environment=DOTNET_PRINT_TELEMETRY_MESSAGE=false
+      Environment=PATH=/usr/local/cuda-13.2/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      Environment=LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64
+      Environment=CUDA_HOME=/usr/local/cuda-13.2
+
+      [Install]
+      WantedBy=multi-user.target
+      EOF
+    # =================================================================
+    # 8. Nginx reverse proxy (HTTP -> HTTPS -> Kestrel)
+    # =================================================================
+    - |
+      cat <<'EOF' > /etc/nginx/sites-available/default
+      server {
+          listen 80;
+          server_name _;
+          return 301 https://$host$request_uri;
+      }
+
+      server {
+          listen 443 ssl;
+          server_name _;
+
+          ssl_certificate /etc/ssl/certs/ssl-cert-snakeoil.pem;
+          ssl_certificate_key /etc/ssl/private/ssl-cert-snakeoil.key;
+
+          location / {
+              proxy_pass         http://localhost:5000;
+              proxy_http_version 1.1;
+              proxy_set_header   Upgrade $http_upgrade;
+              proxy_set_header   Connection keep-alive;
+              proxy_set_header   Host $host;
+              proxy_cache_bypass $http_upgrade;
+              proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header   X-Forwarded-Proto $scheme;
+          }
+      }
+      EOF
+    # =================================================================
+    # 9. Enable services and reboot
+    # =================================================================
+    - systemctl daemon-reload
+    - systemctl enable comfyui.service
+    - systemctl enable world-forge.service
+    - systemctl enable nginx
+    - systemctl restart nginx
+    - reboot
