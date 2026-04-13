@@ -189,11 +189,22 @@ if (-not $SkipCUDA) {
 } else { Write-Step "4/6 Skipping CUDA" }
 
 # =====================================================================
-# 5. Environment variables
+# 5. Environment + Developer Mode
 # =====================================================================
 Write-Step "5/6 Environment"
 Refresh-Path
-Write-OK "PATH refreshed"
+
+# Enable Developer Mode (required by TRELLIS2 for symlinks without Admin)
+$devMode = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" -Name "AllowDevelopmentWithoutDevLicense" -ErrorAction SilentlyContinue
+if (-not $devMode -or $devMode.AllowDevelopmentWithoutDevLicense -ne 1) {
+    Write-Host "  Enabling Developer Mode (needed by TRELLIS2 for symlinks)..."
+    reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" /t REG_DWORD /f /v "AllowDevelopmentWithoutDevLicense" /d "1" 2>&1 | Out-Null
+    Write-OK "Developer Mode enabled"
+} else {
+    Write-OK "Developer Mode already enabled"
+}
+
+Write-OK "Environment ready"
 
 # =====================================================================
 # 6. ComfyUI + Nodes + Dependencies
