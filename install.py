@@ -23,6 +23,8 @@ try:
         install_remote_packages,
         install_platform_packages,
         install_isolated_packages,
+        install_spconv_from_source,
+        get_spconv_cuda_tag,
         wheels_dir_exists_and_not_empty,
         build_config,
         PYTHON_PATH,
@@ -110,7 +112,20 @@ try:
     # Install packages that needs specify remote url
     install_remote_packages(build_config.build_base_packages)
     install_platform_packages()
-    
+
+    # Install spconv with CUDA-version-aware handling
+    spconv_tag = get_spconv_cuda_tag()
+    if spconv_tag == "source":
+        cstr("CUDA 13.x detected: building spconv from source...").msg.print()
+        try:
+            install_spconv_from_source()
+        except Exception as e:
+            cstr(f"spconv source build failed: {e}").warning.print()
+    else:
+        spconv_pkg = f"spconv-{spconv_tag}"
+        cstr(f"Installing {spconv_pkg}...").msg.print()
+        subprocess.run([PYTHON_PATH, "-s", "-m", "pip", "install", spconv_pkg])
+
     # Install packages requiring special flags (like --no-build-isolation)
     if hasattr(build_config, 'isolated_packages'):
         install_isolated_packages(build_config.isolated_packages)

@@ -1,4 +1,4 @@
-ARG CUDA_VERSION=12.4.0-devel
+ARG CUDA_VERSION=13.2.0-devel
 
 FROM --platform=amd64 docker.io/nvidia/cuda:${CUDA_VERSION}-ubuntu22.04
 

@@ -11,6 +11,7 @@ sys.path.append(BUILD_SCRIPT_ROOT_ABS_PATH)
 
 from build_utils import (
     get_platform_config_name,
+    get_cuda_major_minor,
     calculate_runtime,
     git_folder_parallel,
     install_remote_packages,
@@ -46,10 +47,34 @@ def get_dependency_dir(dependency):
     return dependency_dir, is_url
     
 def setup_build_env():
-    # Set CMake argumens fo build packages based on CUDA
-    os.environ["CMAKE_ARGS"] = "-DBUILD_opencv_world=ON -DWITH_CUDA=ON -DCUDA_FAST_MATH=ON -DWITH_CUBLAS=ON -DCUDA_ARCH_PTX=9.0 -DWITH_NVCUVID=ON"
+    # Determine PTX architecture based on CUDA version
+    cuda_ver = get_cuda_major_minor()
+    if cuda_ver and cuda_ver[0] >= 13:
+        ptx_arch = "10.0"  # Blackwell (CUDA 13.x)
+    else:
+        ptx_arch = "9.0"   # Hopper (CUDA 12.x and older)
+
+    # Set CMake arguments for build packages based on CUDA
+    os.environ["CMAKE_ARGS"] = (
+        f"-DBUILD_opencv_world=ON -DWITH_CUDA=ON -DCUDA_FAST_MATH=ON "
+        f"-DWITH_CUBLAS=ON -DCUDA_ARCH_PTX={ptx_arch} -DWITH_NVCUVID=ON"
+    )
+
+    # On Windows with CUDA 13+, CCCL headers require /Zc:preprocessor for conformant preprocessor
+    if platform.system() == "Windows" and cuda_ver and cuda_ver[0] >= 13:
+        existing_cxxflags = os.environ.get("CXXFLAGS", "")
+        if "/Zc:preprocessor" not in existing_cxxflags:
+            os.environ["CXXFLAGS"] = f"{existing_cxxflags} /Zc:preprocessor".strip()
+        # Also pass to nvcc via -Xcompiler
+        existing_nvcc = os.environ.get("NVCC_PREPEND_FLAGS", "")
+        if "/Zc:preprocessor" not in existing_nvcc:
+            os.environ["NVCC_PREPEND_FLAGS"] = f"{existing_nvcc} -Xcompiler /Zc:preprocessor".strip()
+        print(f"CUDA 13.x on Windows: added /Zc:preprocessor to CXXFLAGS and NVCC_PREPEND_FLAGS")
+
+    print(f"Build environment: CUDA PTX arch={ptx_arch}, CUDA version={cuda_ver}")
+
     subprocess.run([PYTHON_PATH, "-s", "-m", "pip", "install", "-r", BUILD_REQUIREMENTS_FILE_ABS_PATH])
-    
+
     install_remote_packages(build_config.build_base_packages)
     install_platform_packages()
 
