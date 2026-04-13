@@ -1,0 +1,24 @@
+# =============================================================================
+# ComfyUI-3D-Pack: CUDA 12.x requirements (12.1 - 12.8)
+# =============================================================================
+# For systems with CUDA 12.x toolkit. Install with:
+#   pip install -r requirements/cuda12x.txt
+#
+# This installs PyTorch 2.9.1 + cu126 (works for CUDA 12.1-12.8)
+
+-r base.txt
+
+# --- PyTorch stack (cu126 covers CUDA 12.1-12.8) ---
+--extra-index-url https://download.pytorch.org/whl/cu126
+torch==2.9.1
+torchvision==0.24.1
+torchaudio==2.9.1
+xformers==0.0.34
+
+# --- CUDA extensions (prebuilt wheels) ---
+cumm-cu126
+spconv-cu126
+
+# --- torch-scatter (PyG wheels) ---
+--find-links https://data.pyg.org/whl/torch-2.9.1+cu126.html
+torch-scatter

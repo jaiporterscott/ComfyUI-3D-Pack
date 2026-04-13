@@ -1,16 +1,8 @@
 # =============================================================================
-# ComfyUI-3D-Pack: Root requirements (base packages only)
+# ComfyUI-3D-Pack: Base requirements (CUDA-independent)
 # =============================================================================
-# This file installs CUDA-independent packages. It is consumed by ComfyUI-Manager
-# and pip install. CUDA-specific packages (torch, spconv, etc.) are handled by
-# install.py which auto-detects your CUDA version.
-#
-# For manual installation with CUDA version control, see requirements/ folder:
-#   python requirements/install_requirements.py          # auto-detect
-#   pip install -r requirements/cuda12x.txt              # CUDA 12.x
-#   pip install -r requirements/cuda13x.txt              # CUDA 13.x (Linux)
-#   pip install -r requirements/cuda13x_windows.txt      # CUDA 13.x (Windows)
-# =============================================================================
+# These packages work across all CUDA versions. Install with:
+#   pip install -r requirements/base.txt
 
 # build tools
 cmake
