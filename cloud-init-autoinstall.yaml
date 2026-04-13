@@ -24,10 +24,10 @@ autoinstall:
     - openssh-server
     - dotnet-sdk-8.0
     - aspnetcore-runtime-8.0
-    # ---- Python 3.12 (recommended for ComfyUI-3D-Pack) ----
-    - python3.12
-    - python3.12-dev
-    - python3.12-venv
+    # ---- Python 3.11 (required by UniRig, compatible with ComfyUI-3D-Pack) ----
+    - python3.11
+    - python3.11-dev
+    - python3.11-venv
     - python3-pip
     # ---- Build tools for CUDA extensions ----
     - cmake
@@ -77,9 +77,9 @@ autoinstall:
     # =================================================================
     # 3. Python 3.12 setup
     # =================================================================
-    - update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
-    - update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1
-    - curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12
+    - update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+    - update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
+    - curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11
     # =================================================================
     # 4. Install ComfyUI + ComfyUI-3D-Pack (CUDA 13.x fork)
     # =================================================================
@@ -92,7 +92,7 @@ autoinstall:
         cd /home/admin/ComfyUI
 
         # --- Create venv inside ComfyUI ---
-        python3.12 -m venv venv
+        python3.11 -m venv venv
         source venv/bin/activate
         pip install --upgrade pip setuptools wheel
 
@@ -107,32 +107,46 @@ autoinstall:
         pip install xformers==0.0.34 \
           --extra-index-url https://download.pytorch.org/whl/cu130
 
-        # --- Clone ComfyUI-3D-Pack (CUDA 13 compatible fork) ---
+        # --- Clone custom nodes ---
         cd custom_nodes
+
+        # ComfyUI-3D-Pack (CUDA 13 compatible fork)
         git clone -b cuda13-compat https://github.com/jaiporterscott/ComfyUI-3D-Pack.git
+
+        # rembg background removal node
+        git clone https://github.com/Jcd1230/rembg-comfyui-node.git
+
+        # ComfyUI-UniRig (auto-rigging, bundles Blender + UniRig)
+        git clone https://github.com/PozzettiAndrea/ComfyUI-UniRig.git
 
         # --- spconv/cumm (cu126 wheels, ABI forward-compatible with CUDA 13.x) ---
         pip install cumm-cu126 spconv-cu126
 
-        # --- torch-scatter (cu130 wheels from PyG) ---
-        pip install torch-scatter \
+        # --- torch-scatter + torch-cluster (cu130 wheels from PyG, needed by UniRig) ---
+        pip install torch-scatter torch-cluster \
           --find-links https://data.pyg.org/whl/torch-2.9.1+cu130.html
 
-        # --- scipy (pinned >=1.15 for Py3.12 wheels, installed before gpytoolbox) ---
+        # --- scipy (pinned >=1.15 for prebuilt wheels, must install before gpytoolbox) ---
         pip install "scipy>=1.15.0"
 
         # --- gpytoolbox (--no-build-isolation to use system scipy) ---
         pip install --no-build-isolation gpytoolbox
 
-        # --- ComfyUI-3D-Pack base requirements ---
+        # --- rembg with GPU support (onnxruntime-gpu for CUDA acceleration) ---
+        pip install "rembg[gpu]"
+
+        # --- ComfyUI-3D-Pack base requirements + CUDA extensions ---
         cd ComfyUI-3D-Pack
         pip install -r requirements.txt
-
-        # --- Build CUDA extensions (pytorch3d, nvdiffrast, diff-gaussian-rasterization) ---
-        # install.py auto-detects CUDA 13.2 and handles the dual CUDA approach
         python install.py
+        cd ..
 
-        echo "ComfyUI + 3D-Pack installation complete!"
+        # --- UniRig requirements ---
+        cd ComfyUI-UniRig
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        cd ..
+
+        echo "ComfyUI + all custom nodes installation complete!"
       '
     # =================================================================
     # 5. ComfyUI systemd service (headless, listen on port 8188)
