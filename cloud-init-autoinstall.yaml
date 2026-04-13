@@ -107,46 +107,133 @@ autoinstall:
         pip install xformers==0.0.34 \
           --extra-index-url https://download.pytorch.org/whl/cu130
 
-        # --- Clone custom nodes ---
+        # ===========================================================
+        # Clone all custom nodes
+        # ===========================================================
         cd custom_nodes
 
-        # ComfyUI-3D-Pack (CUDA 13 compatible fork)
+        # ---- 3D Generation & Processing ----
+        # ComfyUI-3D-Pack (CUDA 13 compatible fork) - Gaussian splatting, NeRF, mesh gen
         git clone -b cuda13-compat https://github.com/jaiporterscott/ComfyUI-3D-Pack.git
+        # TRELLIS2 - Microsoft image-to-3D with PBR materials
+        git clone https://github.com/PozzettiAndrea/ComfyUI-TRELLIS2.git
+        # GeometryPack - Professional mesh ops: remesh, UV unwrap, hole fill, decimation
+        git clone https://github.com/PozzettiAndrea/ComfyUI-GeometryPack.git
 
-        # rembg background removal node
+        # ---- Rigging & Animation ----
+        # UniRig - Auto-rigging (bundles Blender + UniRig model)
+        git clone https://github.com/PozzettiAndrea/ComfyUI-UniRig.git
+        # MotionCapture - Video to SMPL 3D skeletal motion capture
+        git clone https://github.com/PozzettiAndrea/ComfyUI-MotionCapture.git
+        # Frame interpolation - RIFE, FILM for smooth animation
+        git clone https://github.com/Fannovel16/ComfyUI-Frame-Interpolation.git
+
+        # ---- Body & Character ----
+        # SAM3DBody - 3D body mesh extraction with body-part segmentation
+        git clone https://github.com/PozzettiAndrea/ComfyUI-SAM3DBody.git
+
+        # ---- Texturing & PBR Materials ----
+        # TextureAlchemy - PBR extractor, combiner, height-to-normal
+        git clone https://github.com/amtarr/ComfyUI-TextureAlchemy.git
+        # PBRFusion - Diffusion-based PBR map generation (normal, height, roughness)
+        git clone https://github.com/Night1099/COMFYUI-PBRFusion4.git
+
+        # ---- ControlNet & Pose ----
+        # ControlNet Aux - OpenPose, depth, normal, canny preprocessors
+        git clone https://github.com/Fannovel16/comfyui_controlnet_aux.git
+        # IPAdapter Plus - Style transfer via reference images + FaceID
+        git clone https://github.com/cubiq/ComfyUI_IPAdapter_plus.git
+
+        # ---- Segmentation ----
+        # SAM2 - Meta Segment Anything 2 for video/image segmentation
+        git clone https://github.com/kijai/ComfyUI-segment-anything-2.git
+        # GroundingDino SAM - Text-prompted segmentation ("remove the chair")
+        git clone https://github.com/storyicon/comfyui_segment_anything.git
+        # Background removal
         git clone https://github.com/Jcd1230/rembg-comfyui-node.git
 
-        # ComfyUI-UniRig (auto-rigging, bundles Blender + UniRig)
-        git clone https://github.com/PozzettiAndrea/ComfyUI-UniRig.git
+        # ---- Upscaling ----
+        # UltimateSDUpscale - Tile-based diffusion upscaling
+        git clone --recursive https://github.com/ssitu/ComfyUI_UltimateSDUpscale.git
 
-        # --- spconv/cumm (cu126 wheels, ABI forward-compatible with CUDA 13.x) ---
+        # ---- Essential Workflow Nodes ----
+        # Impact Pack - Face detailer, upscale pipeline (~40% of pro workflows use this)
+        git clone https://github.com/ltdrdata/ComfyUI-Impact-Pack.git
+        # KJNodes - Set/Get nodes, animation helpers, shape drawing
+        git clone https://github.com/kijai/ComfyUI-KJNodes.git
+        # ComfyUI-Manager - Official node installer/registry
+        git clone https://github.com/Comfy-Org/ComfyUI-Manager.git
+        # Video Helper Suite - Video load/save, frame extraction
+        git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git
+
+        # ===========================================================
+        # Install shared CUDA dependencies
+        # ===========================================================
+
+        # spconv/cumm (cu126 wheels, ABI forward-compatible with CUDA 13.x)
         pip install cumm-cu126 spconv-cu126
 
-        # --- torch-scatter + torch-cluster (cu130 wheels from PyG, needed by UniRig) ---
+        # PyG packages (torch-scatter + torch-cluster for UniRig, SAM3DBody)
         pip install torch-scatter torch-cluster \
           --find-links https://data.pyg.org/whl/torch-2.9.1+cu130.html
 
-        # --- scipy (pinned >=1.15 for prebuilt wheels, must install before gpytoolbox) ---
+        # scipy first (prebuilt wheels), then gpytoolbox (needs --no-build-isolation)
         pip install "scipy>=1.15.0"
-
-        # --- gpytoolbox (--no-build-isolation to use system scipy) ---
         pip install --no-build-isolation gpytoolbox
 
-        # --- rembg with GPU support (onnxruntime-gpu for CUDA acceleration) ---
+        # rembg with GPU (onnxruntime-gpu for CUDA-accelerated background removal)
         pip install "rembg[gpu]"
 
-        # --- ComfyUI-3D-Pack base requirements + CUDA extensions ---
+        # insightface (needed by IPAdapter FaceID)
+        pip install insightface
+
+        # ===========================================================
+        # Install each node's requirements
+        # ===========================================================
+
+        # ComfyUI-3D-Pack (heaviest - builds pytorch3d, nvdiffrast, etc.)
         cd ComfyUI-3D-Pack
         pip install -r requirements.txt
         python install.py
         cd ..
 
-        # --- UniRig requirements ---
-        cd ComfyUI-UniRig
-        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-        cd ..
+        # Install requirements for nodes that have them
+        for node_dir in \
+          ComfyUI-Impact-Pack \
+          ComfyUI-KJNodes \
+          ComfyUI-VideoHelperSuite \
+          comfyui_controlnet_aux \
+          ComfyUI-Frame-Interpolation \
+          ComfyUI-TextureAlchemy \
+          ComfyUI-UniRig \
+          ComfyUI-TRELLIS2 \
+          ComfyUI-GeometryPack \
+          ComfyUI-MotionCapture \
+          ComfyUI-SAM3DBody \
+          ComfyUI-segment-anything-2 \
+          comfyui_segment_anything \
+          COMFYUI-PBRFusion4; do
+          if [ -f "$node_dir/requirements.txt" ]; then
+            echo "Installing requirements for $node_dir..."
+            pip install -r "$node_dir/requirements.txt" || true
+          fi
+          if [ -f "$node_dir/install.py" ]; then
+            echo "Running install.py for $node_dir..."
+            cd "$node_dir" && python install.py && cd .. || cd ..
+          fi
+        done
 
-        echo "ComfyUI + all custom nodes installation complete!"
+        echo "============================================"
+        echo "ComfyUI + all custom nodes installed!"
+        echo "  3D:          3D-Pack, TRELLIS2, GeometryPack"
+        echo "  Rigging:     UniRig, MotionCapture"
+        echo "  Body:        SAM3DBody"
+        echo "  Textures:    TextureAlchemy, PBRFusion4"
+        echo "  ControlNet:  controlnet_aux, IPAdapter+"
+        echo "  Segment:     SAM2, GroundingDino, rembg"
+        echo "  Upscale:     UltimateSDUpscale"
+        echo "  Core:        Impact-Pack, KJNodes, Manager"
+        echo "============================================"
       '
     # =================================================================
     # 5. ComfyUI systemd service (headless, listen on port 8188)
