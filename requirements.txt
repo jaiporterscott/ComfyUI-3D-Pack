@@ -16,9 +16,9 @@ opencv-python
 pillow
 nerfacc>=0.5.3
 slangtorch
-cumm==0.7.11
-# spconv is installed dynamically by install.py based on detected CUDA version
-# (prebuilt wheels for CUDA <=12.8, built from source for CUDA 13.x)
+# cumm and spconv are installed dynamically by install.py based on detected CUDA version
+# CUDA <=12.8: prebuilt cumm/spconv wheels
+# CUDA 13.x:   dual CUDA approach (build with 12.x toolkit, run on 13.x driver)
 
 git+https://github.com/EasternJournalist/utils3d.git#egg=utils3d
 git+https://github.com/ashawkey/kiuikit.git#egg=kiui

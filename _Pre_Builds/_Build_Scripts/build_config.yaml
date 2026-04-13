@@ -1,6 +1,6 @@
 repo_id: "DenisKochetov/Comfy3D_Pre_Builds"
 supported_cuda_versions: ["13.2", "13.0", "12.8", "12.6", "12.4", "12.1", "11.8"]
-cuda_version: "13.2"
+cuda_version: "13.0"  # Default cu tag: cu130 (PyTorch publishes cu130, not cu132)
 
 # Packages inside this file will be pip downloaded before actual build start
 build_requirements: "build_requirements.txt"
@@ -27,8 +27,8 @@ platform_packages:
 
 # Simple spconv installation with CUDA mapping
 spconv_cuda_mapping:
-  "13.2": "source"  # Build from source for CUDA 13.x (no prebuilt wheels yet)
-  "13.0": "source"
+  "13.2": "dual_cuda"  # Use dual CUDA approach: build with CUDA 12.x, run on 13.x
+  "13.0": "dual_cuda"
   "12.8": "cu126"  # Default for 12.8 and maximum available
   "12.6": "cu126"
   "12.4": "cu124"
