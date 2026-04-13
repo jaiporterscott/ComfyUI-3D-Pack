@@ -38,7 +38,7 @@ $ProgressPreference = "SilentlyContinue"  # Speed up Invoke-WebRequest
 # =====================================================================
 # Configuration
 # =====================================================================
-$PYTHON_VERSION   = "3.11.11"
+$PYTHON_VERSION   = "3.11.9"  # Last 3.11.x with Windows installer (3.11.10+ are source-only)
 $PYTHON_URL       = "https://www.python.org/ftp/python/$PYTHON_VERSION/python-$PYTHON_VERSION-amd64.exe"
 $GIT_URL          = "https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.2/Git-2.47.1.2-64-bit.exe"
 $VS_BUILDTOOLS_URL = "https://aka.ms/vs/17/release/vs_BuildTools.exe"
