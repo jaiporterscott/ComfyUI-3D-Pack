@@ -267,7 +267,17 @@ if (-not $SkipComfyUI) {
     & $python -m pip install "xformers==$XFORMERS_VER" --index-url $TORCH_INDEX
     Write-OK "xformers installed"
 } else {
-    Write-OK "Skipping PyTorch/ComfyUI/xformers (existing install)"
+    # Detect existing PyTorch's CUDA tag so shared deps use the right index
+    $torchVer = & $python -c "import torch; print(torch.__version__)" 2>$null
+    if ($torchVer -match '\+cu(\d+)') {
+        $CU_TAG = "cu$($Matches[1])"
+        $TORCH_INDEX = "https://download.pytorch.org/whl/$CU_TAG"
+        $TORCH_VERSION = ($torchVer -split '\+')[0]
+        $PYG_LINKS = "https://data.pyg.org/whl/torch-$torchVer.html"
+        Write-OK "Detected existing PyTorch $torchVer -> using $CU_TAG"
+    } else {
+        Write-OK "Skipping PyTorch detection (using defaults)"
+    }
 }
 
 # ===========================================================
