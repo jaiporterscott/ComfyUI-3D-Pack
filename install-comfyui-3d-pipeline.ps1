@@ -327,7 +327,9 @@ foreach ($node in $nodes) {
         $gitArgs += $node.Url
         $gitArgs += $nodePath
         Write-Host "  Cloning $($node.Name)..."
+        $ErrorActionPreference = "Continue"
         & git @gitArgs 2>&1 | Out-Null
+        $ErrorActionPreference = "Stop"
         $newlyCloned += $node.Name
     }
 }
